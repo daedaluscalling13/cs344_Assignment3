@@ -1,0 +1,1 @@
+void expandVariable(char* commandString, char* finalString);

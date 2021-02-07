@@ -10,6 +10,7 @@
 #include <string.h>
 #include "shellcommand.h"
 #include "parsecommand.h"
+#include "expand.h"
 
 /* Parse the current line which is space delimited and create a
 *  student struct with the data in this line
@@ -97,6 +98,7 @@ int main(int argc, char *argv[])
 {
     // char * startLine = ":"
     char* readBuffer = calloc(sizeof(char), 2048);
+    char* expandedString = calloc(sizeof(char), 2048);
     struct ShellCommand* command;
 
     // Put semicolon on new line
@@ -107,12 +109,13 @@ int main(int argc, char *argv[])
     scanf("%[^\n]s", readBuffer);
     fflush(stdin);
 
-    printf("%s\n", readBuffer);
-    fflush(stdout);
+    // Expand the string if necessary
+    expandVariable(readBuffer, expandedString);
 
     // Parse the string into the ShellCommand struct
-    command = parseCommand(readBuffer);
+    command = parseCommand(expandedString);
 
+    // Print output for troubleshooting
     printf("Parsed command\n");
     printf("Command: %s\n", command->command);
     for(int i=0; i<512; i++){
