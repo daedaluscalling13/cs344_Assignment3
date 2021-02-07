@@ -1,0 +1,1 @@
+struct ShellCommand* parseCommand(char* commandString);
