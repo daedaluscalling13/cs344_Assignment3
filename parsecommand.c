@@ -12,7 +12,15 @@ struct ShellCommand* parseCommand(char* commandString){
     struct ShellCommand* command = malloc(sizeof(struct ShellCommand));
     int f_command = 1;
     int arg_counter = 0;
-    int f_background = (strcmp(commandString + strlen(commandString) - 1, "&") == 0);
+
+    // Grab the background process char before strtok-ing the string
+    int f_background = (commandString[strlen(commandString) - 1] == '&');
+
+    // If the commandString begins with #, it is a comment
+    // Don't do anything.
+    if(commandString[0] == '#'){
+        return command;
+    }
 
     char* token = strtok_r(commandString, " ", &saveptr);
 
