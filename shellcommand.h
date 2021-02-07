@@ -9,6 +9,7 @@ struct ShellCommand
     char *input_file;
     char *output_file;
     // Flags informing process functionality
+    int f_args;
     int f_output_file;
     int f_input_file;
     int f_background_process;

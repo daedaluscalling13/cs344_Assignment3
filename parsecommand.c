@@ -29,6 +29,7 @@ struct ShellCommand* parseCommand(char* commandString){
         // Process into the ShellCommand struct
         if (f_command){
             command->command = calloc(strlen(token) + 1, sizeof(char));
+            memset(command->command, '\0', strlen(command->command));
             strcpy(command->command, token);
             f_command = 0;
         }
@@ -71,6 +72,7 @@ struct ShellCommand* parseCommand(char* commandString){
         else{
             strcpy(command->args[arg_counter], token);
             arg_counter++;
+            command->f_args = 1;
         }
 
         // Progress through the string
