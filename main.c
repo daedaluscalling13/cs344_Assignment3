@@ -10,6 +10,7 @@
 #include <fcntl.h>
 #include <sys/wait.h>
 #include "shellcommand.h"
+#include "bg_process.h"
 #include "parsecommand.h"
 #include "expand.h"
 
@@ -23,11 +24,69 @@ int main(int argc, char *argv[])
     int last_exit_status = 0;
     size_t bufferSize = 2048;
 
+    int i_fd;
+    int o_fd;
+    int i_d_result;
+    int o_d_result;
+
+    struct BgProcess* bg_list = NULL;
+    struct BgProcess* cur_bg_proc;
+    struct BgProcess* prev_bg_proc;
+    struct BgProcess* new_bg_process = NULL;
+
     // Starting cwd
     char current_working_directory [FILENAME_MAX];
     getcwd(current_working_directory, FILENAME_MAX);
 
     while(f_running){
+
+        if (bg_list != NULL){
+
+            // Search through the linked list of background processes running
+            cur_bg_proc = bg_list;
+            prev_bg_proc = NULL;
+            printf("Current bg process list:\n");
+
+            while (cur_bg_proc != NULL){
+                printf("%d\n", (int)cur_bg_proc->bg_pid);
+
+                cur_bg_proc->bg_done = waitpid(cur_bg_proc->bg_pid, &cur_bg_proc->bg_status, WNOHANG);
+
+                // background process has finished
+                if(cur_bg_proc->bg_done != 0){
+                    // Update user
+                    if(WIFEXITED(cur_bg_proc->bg_status)){
+                        printf("background pid %d is done: exit value %d\n", (int)cur_bg_proc->bg_pid, WEXITSTATUS(cur_bg_proc->bg_status));
+                        fflush(stdout);
+                    }
+                    else {
+                        printf("background pid %d is done: terminated by signal %d\n", (int)cur_bg_proc->bg_pid, WTERMSIG(cur_bg_proc->bg_status));
+                        fflush(stdout);
+                    }
+
+                    // remove from list
+                    // This is the head
+                    if(prev_bg_proc == NULL){
+                        bg_list = cur_bg_proc->next;
+                    }
+                    //Not the head
+                    else{
+                        prev_bg_proc->next = cur_bg_proc->next;
+                    }
+
+                    // free memory
+                    free(cur_bg_proc);
+                    cur_bg_proc = NULL;
+                }
+                else{
+                    // Increment forward
+                    prev_bg_proc = cur_bg_proc;
+                    cur_bg_proc = cur_bg_proc->next;
+
+                }
+            }
+        }
+
         // Clear this string
         memset(readBuffer, '\0', 2048);
         memset(expandedString, '\0', 2048);
@@ -105,13 +164,26 @@ int main(int argc, char *argv[])
 
                     // Redirect input from a file
                     if(command->f_input_file){
-                        int i_fd = open(command->input_file, O_RDONLY);
+                        i_fd = open(command->input_file, O_RDONLY);
                         if(i_fd == -1){
                             perror("input open()");
                             exit(1);
                         }
 
-                        int i_d_result = dup2(i_fd, 0);
+                        i_d_result = dup2(i_fd, 0);
+                        if(i_d_result == -1){
+                            perror("input dup2()");
+                            exit(1);
+                        }
+                    }
+                    else if(command->f_background_process){
+                        i_fd = open("/dev/null", O_RDONLY);
+                        if(i_fd == -1){
+                            perror("input open()");
+                            exit(1);
+                        }
+
+                        i_d_result = dup2(i_fd, 0);
                         if(i_d_result == -1){
                             perror("input dup2()");
                             exit(1);
@@ -120,18 +192,30 @@ int main(int argc, char *argv[])
 
                     // Redirect output to a file
                     if (command->f_output_file){
-                        int o_fd = open(command->output_file, O_WRONLY | O_CREAT | O_TRUNC, 0640);
+                        o_fd = open(command->output_file, O_WRONLY | O_CREAT | O_TRUNC, 0640);
                         if(o_fd == -1){
                             perror("output open()");
                             exit(1);
                         }
 
-                        int o_d_result = dup2(o_fd, 1);
+                        o_d_result = dup2(o_fd, 1);
                         if (o_d_result == -1){
                             perror("output dup2");
                             exit(1);
                         }
+                    }
+                    else if(command->f_background_process){
+                        o_fd = open("/dev/null", O_WRONLY | O_CREAT | O_TRUNC, 0640);
+                        if(o_fd == -1){
+                            perror("output open()");
+                            exit(1);
+                        }
 
+                        o_d_result = dup2(o_fd, 1);
+                        if (o_d_result == -1){
+                            perror("output dup2");
+                            exit(1);
+                        }
                     }
 
                     execvp(command->command, command->args);
@@ -140,16 +224,34 @@ int main(int argc, char *argv[])
                     break;
                 default:
                     //Parent process
-                    child_pid = waitpid(child_pid, &last_exit_status, 0);
+                    if (!command->f_background_process){
+                            child_pid = waitpid(child_pid, &last_exit_status, 0);
 
-                    if(WIFEXITED(last_exit_status)){
-                        last_exit_status = WEXITSTATUS(last_exit_status);
-                    }
-                    else {
-                        last_exit_status = WTERMSIG(last_exit_status);
-                    }
+                        if(WIFEXITED(last_exit_status)){
+                            last_exit_status = WEXITSTATUS(last_exit_status);
+                        }
+                        else {
+                            last_exit_status = WTERMSIG(last_exit_status);
+                        }
 
-                    // printf("Child exited with status %d\n", last_exit_status);
+                        // printf("Child exited with status %d\n", last_exit_status);
+                    }
+                    else{
+                        new_bg_process = malloc(sizeof(struct BgProcess));
+                        new_bg_process->bg_pid = child_pid;
+
+                        if (bg_list != NULL){
+                            new_bg_process->next = bg_list;
+                            bg_list = new_bg_process;
+                        }
+                        else{
+                            new_bg_process->next = NULL;
+                            bg_list = new_bg_process;
+                        }
+
+                        printf("background pid is %d\n", (int)child_pid);
+                        fflush(stdout);
+                    }
 
                     break;
             }
