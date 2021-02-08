@@ -8,11 +8,28 @@
 #include <unistd.h>
 #include <errno.h>
 #include <fcntl.h>
+#include <signal.h>
 #include <sys/wait.h>
 #include "shellcommand.h"
 #include "bg_process.h"
+#include "prompt.h"
 #include "parsecommand.h"
 #include "expand.h"
+
+int g_fgmode = 0;
+
+void handle_SIGTSTP(int signo){
+    char* message1 = "Entering foreground-only mode\n";
+    char* message2 = "Exiting foreground-only mode\n";
+
+    g_fgmode = (g_fgmode == 0 ? 1: 0);
+    if(g_fgmode){
+        write(STDOUT_FILENO, message1, 31);
+    }
+    else {
+        write(STDOUT_FILENO, message2, 30);
+    }
+}
 
 int main(int argc, char *argv[])
 {
@@ -22,6 +39,7 @@ int main(int argc, char *argv[])
     struct ShellCommand* command;
     int f_running = 1;
     int last_exit_status = 0;
+    int f_terminated = 0;
     size_t bufferSize = 2048;
 
     int i_fd;
@@ -34,6 +52,15 @@ int main(int argc, char *argv[])
     struct BgProcess* prev_bg_proc;
     struct BgProcess* new_bg_process = NULL;
 
+    struct sigaction SIGINT_action = {0};
+    sigfillset(&SIGINT_action.sa_mask);
+    SIGINT_action.sa_flags = SA_RESTART;
+
+    struct sigaction SIGTSTP_action = {0};
+    SIGTSTP_action.sa_handler = handle_SIGTSTP;
+    sigfillset(&SIGINT_action.sa_mask);
+    SIGINT_action.sa_flags = SA_RESTART;
+
     // Starting cwd
     char current_working_directory [FILENAME_MAX];
     getcwd(current_working_directory, FILENAME_MAX);
@@ -45,21 +72,20 @@ int main(int argc, char *argv[])
             // Search through the linked list of background processes running
             cur_bg_proc = bg_list;
             prev_bg_proc = NULL;
-            printf("Current bg process list:\n");
 
             while (cur_bg_proc != NULL){
-                printf("%d\n", (int)cur_bg_proc->bg_pid);
-
                 cur_bg_proc->bg_done = waitpid(cur_bg_proc->bg_pid, &cur_bg_proc->bg_status, WNOHANG);
 
                 // background process has finished
                 if(cur_bg_proc->bg_done != 0){
                     // Update user
                     if(WIFEXITED(cur_bg_proc->bg_status)){
+                        f_terminated = 0;
                         printf("background pid %d is done: exit value %d\n", (int)cur_bg_proc->bg_pid, WEXITSTATUS(cur_bg_proc->bg_status));
                         fflush(stdout);
                     }
                     else {
+                        f_terminated = 1;
                         printf("background pid %d is done: terminated by signal %d\n", (int)cur_bg_proc->bg_pid, WTERMSIG(cur_bg_proc->bg_status));
                         fflush(stdout);
                     }
@@ -87,36 +113,25 @@ int main(int argc, char *argv[])
             }
         }
 
-        // Clear this string
+        // Clear these string
         memset(readBuffer, '\0', 2048);
         memset(expandedString, '\0', 2048);
 
-        // Put semicolon on new line
-        printf(": ");
-        fflush(stdout);
-
-        // Read in user input
-        getline(&readBuffer, &bufferSize, stdin);
-        fflush(stdin);
-
-        // Remove newline char
-        // Taken from the stackoverflow forum: https://stackoverflow.com/questions/2693776/removing-trailing-newline-character-from-fgets-input
-        char* newlinePos;
-        if ((newlinePos = strchr(readBuffer, '\n')) != NULL){
-            *newlinePos = '\0';
-        }
+        // Get user input from shell input
+        getInputFromPrompt(readBuffer, &bufferSize);
 
         // Expand the string if necessary
         expandVariable(readBuffer, expandedString);
 
         // Parse the string into the ShellCommand struct
-        command = parseCommand(expandedString);
+        command = parseCommand(expandedString, g_fgmode);
 
         if(command->command == NULL){
             continue;
         }
 
-        // DO COMMANDS
+        // Run Commands
+        // First, built in smallsh commands
         // cd command
         if (strcmp(command->command, "cd") == 0){
             if (command->args[1] == NULL){
@@ -132,22 +147,40 @@ int main(int argc, char *argv[])
                     //No error handling apparently
                 }
             }
-
         }
 
         // status command
         else if (strcmp(command->command, "status") == 0){
-            printf("exit value %d\n", last_exit_status);
-            fflush(stdout);
+            if(f_terminated){
+                printf("terminated by signal %d\n", last_exit_status);
+                fflush(stdout);
+            }
+            else{
+                printf("exit value %d\n", last_exit_status);
+                fflush(stdout);
+            }
         }
 
         // exit command
         else if (strcmp(command->command, "exit") == 0){
-            //TODO: Kill all processes and jobs
+            // Kill all processes and jobs
+            while (bg_list != NULL){
+                cur_bg_proc = bg_list;
+                kill(cur_bg_proc->bg_pid, 15);
+                cur_bg_proc->bg_done = waitpid(cur_bg_proc->bg_pid, &cur_bg_proc->bg_status, 0);
+
+                // remove from list
+                bg_list = cur_bg_proc->next;
+
+                // free memory
+                free(cur_bg_proc);
+                cur_bg_proc = NULL;
+            }
+            // Stop small shell
             f_running = 0;
         }
 
-        // all other commands
+        // Use fork + execvp to execute all other commands
         else {
             // Do other commands
             pid_t child_pid = fork();
@@ -159,8 +192,18 @@ int main(int argc, char *argv[])
                     break;
                 case 0:
                     // Child Process
-                    command->args[0] = calloc(strlen(command->command) + 1, sizeof(char));
-                    strcpy(command->args[0], command->command);
+                    // Trigger correct signal handlers for SIGTSTP and SIGINT
+                    SIGTSTP_action.sa_handler = SIG_IGN;
+                    sigaction(SIGTSTP, &SIGTSTP_action, NULL);
+
+                    if(command->f_background_process){
+                        SIGINT_action.sa_handler = SIG_IGN;
+                        sigaction(SIGINT, &SIGINT_action, NULL);
+                    }
+                    else {
+                        SIGINT_action.sa_handler = SIG_DFL;
+                        sigaction(SIGINT, &SIGINT_action, NULL);
+                    }
 
                     // Redirect input from a file
                     if(command->f_input_file){
@@ -218,24 +261,38 @@ int main(int argc, char *argv[])
                         }
                     }
 
+                    // Run command
+                    command->args[0] = calloc(strlen(command->command) + 1, sizeof(char));
+                    strcpy(command->args[0], command->command);
                     execvp(command->command, command->args);
                     perror("execvp");
                     exit(1);
                     break;
                 default:
                     //Parent process
+                    // Trigger correct signal handlers
+                    SIGINT_action.sa_handler = SIG_IGN;
+                    sigaction(SIGINT, &SIGINT_action, NULL);
+                    sigaction(SIGTSTP, &SIGTSTP_action, NULL);
+
+                    // Wait for foreground processes
                     if (!command->f_background_process){
-                            child_pid = waitpid(child_pid, &last_exit_status, 0);
+                        child_pid = waitpid(child_pid, &last_exit_status, 0);
 
                         if(WIFEXITED(last_exit_status)){
                             last_exit_status = WEXITSTATUS(last_exit_status);
+                            f_terminated = 0;
                         }
-                        else {
+                        else if(WIFSIGNALED(last_exit_status)){
                             last_exit_status = WTERMSIG(last_exit_status);
+                            f_terminated = 1;
+                            printf("Child %d terminated by signal %d\n", (int)child_pid, last_exit_status);
+                        fflush(stdout);
                         }
-
-                        // printf("Child exited with status %d\n", last_exit_status);
                     }
+
+                    // Add a node to the linked list list of background processes
+                    // Continue operation
                     else{
                         new_bg_process = malloc(sizeof(struct BgProcess));
                         new_bg_process->bg_pid = child_pid;
@@ -252,28 +309,11 @@ int main(int argc, char *argv[])
                         printf("background pid is %d\n", (int)child_pid);
                         fflush(stdout);
                     }
-
                     break;
             }
         }
 
-        // Print output for troubleshooting
-        printf("Command: %s\n", command->command);
-        for(int i=0; i<514; i++){
-            if(command->args[i] != NULL){
-                printf("Arg %d: %s\n", i, command->args[i]);
-            }
-        }
-        if(command->f_input_file){
-            printf("Input: %s\n", command->input_file);
-        }
-        if(command->f_output_file){
-            printf("Output: %s\n", command->output_file);
-        }
-        if(command->f_background_process){
-            printf("Background process\n");
-        }
-
+        // TODO: Why do frees crash the program?
         // Free memory
         // memset(command->command, '\0', sizeof(command->command));
         // free(command->command);

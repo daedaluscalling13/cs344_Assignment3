@@ -1,0 +1,1 @@
+void getInputFromPrompt(char* readBuffer, size_t* bufferSize);

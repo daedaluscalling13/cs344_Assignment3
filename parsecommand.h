@@ -1,1 +1,1 @@
-struct ShellCommand* parseCommand(char* commandString);
+struct ShellCommand* parseCommand(char* commandString, int mode);

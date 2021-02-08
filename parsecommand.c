@@ -6,7 +6,7 @@
 /*
  * This command parses the command string from the user into the ShellCommand struct (shellcommand.h).
  */
-struct ShellCommand* parseCommand(char* commandString){
+struct ShellCommand* parseCommand(char* commandString, int mode){
     // For use with strtok_r
     char* saveptr;
     struct ShellCommand* command = malloc(sizeof(struct ShellCommand));
@@ -69,7 +69,9 @@ struct ShellCommand* parseCommand(char* commandString){
         // Background process symbol
         // Need to test this. Not sure the second strcmp makes sense.
         else if((strcmp(token, "&") == 0) && f_background){
-            command->f_background_process = 1;
+            if (mode == 0){
+                command->f_background_process = 1;
+            }
         }
         // Otherwise it's an argument
         // Add to the argument array
