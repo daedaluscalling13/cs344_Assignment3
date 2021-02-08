@@ -11,7 +11,7 @@ struct ShellCommand* parseCommand(char* commandString){
     char* saveptr;
     struct ShellCommand* command = malloc(sizeof(struct ShellCommand));
     int f_command = 1;
-    int arg_counter = 0;
+    int arg_counter = 1;
 
     // Grab the background process char before strtok-ing the string
     int f_background = (commandString[strlen(commandString) - 1] == '&');
@@ -19,6 +19,10 @@ struct ShellCommand* parseCommand(char* commandString){
     // If the commandString begins with #, it is a comment
     // Don't do anything.
     if(commandString[0] == '#'){
+        command->command = NULL;
+        command->args[arg_counter] = NULL;
+        command->input_file = NULL;
+        command->output_file = NULL;
         return command;
     }
 
@@ -70,14 +74,20 @@ struct ShellCommand* parseCommand(char* commandString){
         // Otherwise it's an argument
         // Add to the argument array
         else{
+            command->args[arg_counter] = calloc(strlen(token) + 1, sizeof(char));
             strcpy(command->args[arg_counter], token);
             arg_counter++;
-            command->f_args = 1;
+            if (!command->f_args){
+                command->f_args = 1;
+            }
         }
 
         // Progress through the string
         token = strtok_r(NULL, " ", &saveptr);
     }
+
+    // Make the last argument NULL for execvp
+    command->args[arg_counter] = NULL;
 
     return command;
 }

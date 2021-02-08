@@ -17,6 +17,7 @@ void expandVariable(char* commandString, char* finalString){
     // Get the PID and put it into string format
     pid_t processId = getpid();
     sprintf(processIdStr, "%d", (int)processId);
+    // printf("%d\n", (int)processId);
 
     // Find the substring $$, if possible
     char* saveptr = strstr(commandString, "$$");
@@ -40,7 +41,7 @@ void expandVariable(char* commandString, char* finalString){
     }
 
     // Copy any bytes left after the $$, or all the bytes if $$ is not present.
-    strncpy(finalString + final_index, commandString + start_index, strlen(commandString+start_index));
+    strncpy(finalString + final_index, commandString + start_index, strlen(commandString + start_index));
 
     return;
 }

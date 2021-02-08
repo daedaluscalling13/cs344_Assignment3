@@ -4,10 +4,10 @@
 struct ShellCommand
 {
     // Strings that specify the command
-    char *command;
-    char args[512][256];
-    char *input_file;
-    char *output_file;
+    char* command;
+    char* args[514];
+    char* input_file;
+    char* output_file;
     // Flags informing process functionality
     int f_args;
     int f_output_file;
